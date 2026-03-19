@@ -25,7 +25,7 @@ A fast Rust CLI for querying real-time social media data from X/Twitter and Redd
 ### Cargo (Rust)
 
 ```sh
-cargo install dataverse
+cargo install dataverse-cli
 ```
 
 ### From Source
