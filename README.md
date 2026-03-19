@@ -6,6 +6,8 @@ A fast Rust CLI for querying real-time social media data from X/Twitter and Redd
 > Dataverse CLI is currently in Beta.
 > We'd love your feedback — please open an [issue](https://github.com/macrocosm-os/dataverse-cli/issues) or submit a PR.
 
+<img width="634" alt="Dataverse CLI" src="https://github.com/user-attachments/assets/48e4ff8a-4bef-4976-80ac-7d4e8737280a" />
+
 ## Features at a Glance
 
 - **Real-Time Search** — Query X/Twitter and Reddit posts by keyword, username, or URL via decentralized Bittensor miners
@@ -115,6 +117,8 @@ dv search x --url "https://x.com/user/status/123456"
 | `--mode` | any | Keyword match mode: `any` (OR) or `all` (AND) |
 | `--url` | — | Search by URL instead of keywords |
 
+<img width="958" alt="Search results" src="https://github.com/user-attachments/assets/384548a9-9891-4170-97ef-5637e23c468e" />
+
 ---
 
 ### `dv gravity create` — Start Data Collection
@@ -154,6 +158,8 @@ dv gravity status multicrawler-abc123 --crawlers
 |------|---------|-------------|
 | `task_id` | — | Omit to list all tasks |
 | `--crawlers` | false | Include record counts and data sizes |
+
+<img width="958" alt="Gravity status" src="https://github.com/user-attachments/assets/e4f6c730-5dee-439c-b62c-7ae5f280ded5" />
 
 ---
 
