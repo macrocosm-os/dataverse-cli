@@ -1,5 +1,5 @@
 [package]
-name = "dataverse"
+name = "dataverse-cli"
 version = "0.1.0"
 edition = "2021"
 description = "CLI for Macrocosmos Data Universe (Bittensor SN13) - query social data from X/Twitter and Reddit"
