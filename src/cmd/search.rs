@@ -1,8 +1,7 @@
 use anyhow::{bail, Result};
 use clap::Args;
 
-use crate::api::{ApiClient, OnDemandDataRequest};
-use crate::config::Config;
+use crate::api::OnDemandDataRequest;
 use crate::display::{self, OutputFormat};
 
 use super::GlobalOpts;
@@ -93,8 +92,7 @@ pub async fn run(cli: &GlobalOpts, args: SearchArgs) -> Result<()> {
         url: args.url,
     };
 
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     if cli.dry_run {
         let dry = client.on_demand_data_dry_run(&req)?;

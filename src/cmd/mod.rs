@@ -67,6 +67,14 @@ pub struct GlobalOpts {
     pub base_url: Option<String>,
 }
 
+impl GlobalOpts {
+    /// Build an API client from the global options.
+    pub fn make_client(&self) -> anyhow::Result<crate::api::ApiClient> {
+        let api_key = crate::config::Config::resolve_api_key(&self.api_key)?;
+        crate::api::ApiClient::new(api_key, self.base_url.clone(), self.timeout)
+    }
+}
+
 pub async fn run(cli: Cli) -> Result<()> {
     let command = match cli.command {
         Some(cmd) => cmd,

@@ -2,7 +2,6 @@ use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
 
 use crate::api::*;
-use crate::config::Config;
 use crate::display::{self, OutputFormat};
 
 use super::GlobalOpts;
@@ -114,6 +113,16 @@ fn parse_platform(s: &str) -> Result<String, String> {
     }
 }
 
+fn email_notifications(email: Option<String>) -> Option<Vec<NotificationRequest>> {
+    email.map(|addr| {
+        vec![NotificationRequest {
+            r#type: "email".to_string(),
+            address: addr,
+            redirect_url: None,
+        }]
+    })
+}
+
 pub async fn run(cli: &GlobalOpts, cmd: GravityCommands) -> Result<()> {
     let format = OutputFormat::from_str_opt(&cli.output)?;
 
@@ -146,13 +155,7 @@ async fn create(cli: &GlobalOpts, args: CreateArgs, _format: OutputFormat) -> Re
         post_end_datetime: args.to,
     };
 
-    let notifications = args.email.map(|email| {
-        vec![NotificationRequest {
-            r#type: "email".to_string(),
-            address: email,
-            redirect_url: None,
-        }]
-    });
+    let notifications = email_notifications(args.email);
 
     let req = CreateGravityTaskRequest {
         gravity_tasks: vec![task],
@@ -160,8 +163,7 @@ async fn create(cli: &GlobalOpts, args: CreateArgs, _format: OutputFormat) -> Re
         notification_requests: notifications,
     };
 
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     if cli.dry_run {
         let dry = client.create_gravity_task_dry_run(&req)?;
@@ -185,8 +187,7 @@ async fn status(cli: &GlobalOpts, args: StatusArgs, format: OutputFormat) -> Res
         include_crawlers: if args.crawlers { Some(true) } else { None },
     };
 
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     if cli.dry_run {
         let dry = client.get_gravity_tasks_dry_run(&req)?;
@@ -199,13 +200,7 @@ async fn status(cli: &GlobalOpts, args: StatusArgs, format: OutputFormat) -> Res
 }
 
 async fn build(cli: &GlobalOpts, args: BuildArgs) -> Result<()> {
-    let notifications = args.email.map(|email| {
-        vec![NotificationRequest {
-            r#type: "email".to_string(),
-            address: email,
-            redirect_url: None,
-        }]
-    });
+    let notifications = email_notifications(args.email);
 
     let req = BuildDatasetRequest {
         crawler_id: args.crawler_id,
@@ -213,8 +208,7 @@ async fn build(cli: &GlobalOpts, args: BuildArgs) -> Result<()> {
         max_rows: Some(args.max_rows),
     };
 
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     if cli.dry_run {
         let dry = client.build_dataset_dry_run(&req)?;
@@ -237,8 +231,7 @@ async fn dataset(cli: &GlobalOpts, args: DatasetArgs, format: OutputFormat) -> R
         dataset_id: args.dataset_id,
     };
 
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     if cli.dry_run {
         let dry = client.get_dataset_dry_run(&req)?;
@@ -256,8 +249,7 @@ async fn dataset(cli: &GlobalOpts, args: DatasetArgs, format: OutputFormat) -> R
 }
 
 async fn cancel_task(cli: &GlobalOpts, args: CancelArgs) -> Result<()> {
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     let resp = client.cancel_gravity_task(&args.task_id).await?;
     let msg = resp.message.unwrap_or_else(|| "cancelled".to_string());
@@ -266,8 +258,7 @@ async fn cancel_task(cli: &GlobalOpts, args: CancelArgs) -> Result<()> {
 }
 
 async fn cancel_dataset(cli: &GlobalOpts, args: CancelDatasetArgs) -> Result<()> {
-    let api_key = Config::resolve_api_key(&cli.api_key)?;
-    let client = ApiClient::new(api_key, cli.base_url.clone(), cli.timeout)?;
+    let client = cli.make_client()?;
 
     let resp = client.cancel_dataset(&args.dataset_id).await?;
     let msg = resp.message.unwrap_or_else(|| "cancelled".to_string());

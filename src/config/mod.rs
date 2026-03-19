@@ -19,12 +19,12 @@ impl Config {
 
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
-        if !path.exists() {
-            return Ok(Self::default());
+        match fs::read_to_string(&path) {
+            Ok(contents) => toml::from_str(&contents)
+                .with_context(|| format!("failed to parse {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(anyhow::anyhow!("failed to read {}: {e}", path.display())),
         }
-        let contents = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        toml::from_str(&contents).with_context(|| format!("failed to parse {}", path.display()))
     }
 
     pub fn save(&self) -> Result<()> {

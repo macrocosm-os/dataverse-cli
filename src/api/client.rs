@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use super::types::*;
 
-const DEFAULT_BASE_URL: &str = "https://constellation.api.cloud.macrocosmos.ai";
+pub const DEFAULT_BASE_URL: &str = "https://constellation.api.cloud.macrocosmos.ai";
 
 const SN13_SERVICE: &str = "sn13.v1.Sn13Service";
 const GRAVITY_SERVICE: &str = "gravity.v1.GravityService";
@@ -28,6 +28,11 @@ impl ApiClient {
             HeaderValue::from_str(&format!("dataverse-cli/{}", env!("CARGO_PKG_VERSION")))
                 .expect("valid header value"),
         );
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {api_key}"))
+                .context("invalid API key for header")?,
+        );
 
         let http = reqwest::Client::builder()
             .default_headers(headers)
@@ -44,10 +49,6 @@ impl ApiClient {
 
     fn url(&self, service: &str, method: &str) -> String {
         format!("{}/{}/{}", self.base_url, service, method)
-    }
-
-    fn auth_header(&self) -> String {
-        format!("Bearer {}", self.api_key)
     }
 
     pub fn dry_run(
@@ -82,7 +83,6 @@ impl ApiClient {
         let resp = self
             .http
             .post(&url)
-            .header(AUTHORIZATION, self.auth_header())
             .json(body)
             .send()
             .await

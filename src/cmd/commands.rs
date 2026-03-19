@@ -40,7 +40,7 @@ pub struct FlagInfo {
 pub fn build_catalog() -> CommandCatalog {
     CommandCatalog {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        api_base_url: "https://constellation.api.cloud.macrocosmos.ai".to_string(),
+        api_base_url: crate::api::DEFAULT_BASE_URL.to_string(),
         commands: vec![
             CommandInfo {
                 name: "search".to_string(),

@@ -57,35 +57,33 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Extract a string from a JSON value using a dot-separated path (e.g. "user.username")
-fn extract_str(val: &serde_json::Value, path: &str) -> String {
+/// Traverse a dot-separated path into a JSON value (e.g. "user.username")
+fn traverse_path<'a>(val: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut current = val;
     for key in path.split('.') {
-        match current.get(key) {
-            Some(v) => current = v,
-            None => return "-".to_string(),
-        }
+        current = current.get(key)?;
     }
-    current.as_str().map(|s| s.to_string()).unwrap_or_else(|| {
-        // Handle numbers and booleans as strings
-        if current.is_null() { "-".to_string() } else { current.to_string() }
-    })
+    Some(current)
 }
 
-/// Extract a number from a JSON value using a dot-separated path
-fn extract_num(val: &serde_json::Value, path: &str) -> String {
-    let mut current = val;
-    for key in path.split('.') {
-        match current.get(key) {
-            Some(v) => current = v,
-            None => return "-".to_string(),
-        }
+fn extract_str(val: &serde_json::Value, path: &str) -> String {
+    match traverse_path(val, path) {
+        None => "-".to_string(),
+        Some(v) => v.as_str().map(|s| s.to_string()).unwrap_or_else(|| {
+            if v.is_null() { "-".to_string() } else { v.to_string() }
+        }),
     }
-    current
-        .as_i64()
-        .or_else(|| current.as_f64().map(|f| f as i64))
-        .map(format_count)
-        .unwrap_or_else(|| "-".to_string())
+}
+
+fn extract_num(val: &serde_json::Value, path: &str) -> String {
+    match traverse_path(val, path) {
+        None => "-".to_string(),
+        Some(v) => v
+            .as_i64()
+            .or_else(|| v.as_f64().map(|f| f as i64))
+            .map(format_count)
+            .unwrap_or_else(|| "-".to_string()),
+    }
 }
 
 fn format_count(n: i64) -> String {
@@ -240,14 +238,7 @@ pub fn print_gravity_tasks(tasks: &[GravityTaskState], format: OutputFormat) -> 
             let rows: Vec<TaskRow> = tasks
                 .iter()
                 .map(|t| {
-                    let status_raw = t.status.as_deref().unwrap_or("Unknown");
-                    let status = match status_raw {
-                        "Completed" => status_raw.green().to_string(),
-                        "Running" | "Submitted" => status_raw.cyan().to_string(),
-                        "Failed" | "Cancelled" => status_raw.red().to_string(),
-                        "Pending" => status_raw.yellow().to_string(),
-                        _ => status_raw.to_string(),
-                    };
+                    let status = colorize_status(t.status.as_deref().unwrap_or("Unknown"));
                     let (records, bytes) = extract_crawler_stats(&t.crawler_workflows);
                     TaskRow {
                         id: truncate(
