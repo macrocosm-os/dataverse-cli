@@ -96,11 +96,81 @@ fn format_count(n: i64) -> String {
     }
 }
 
+/// Detect whether a post is from Reddit based on the source field.
+fn is_reddit(post: &serde_json::Value) -> bool {
+    matches!(
+        post.get("source").and_then(|v| v.as_str()),
+        Some("reddit" | "REDDIT")
+    )
+}
+
+/// Extract the display text for a post, handling both X (text) and Reddit (title + body).
+fn post_text(post: &serde_json::Value) -> String {
+    if is_reddit(post) {
+        let title = extract_str(post, "title");
+        let body = extract_str(post, "body");
+        if title != "-" && body != "-" && !body.is_empty() {
+            format!("{title} | {body}")
+        } else if title != "-" {
+            title
+        } else {
+            body
+        }
+    } else {
+        extract_str(post, "text")
+    }
+}
+
+/// Extract author for a post — Reddit uses top-level `username`, X uses `user.username`.
+fn post_author(post: &serde_json::Value) -> String {
+    if is_reddit(post) {
+        extract_str(post, "username")
+    } else {
+        extract_str(post, "user.username")
+    }
+}
+
+/// Extract engagement metrics based on source.
+fn post_likes(post: &serde_json::Value) -> String {
+    if is_reddit(post) {
+        extract_num(post, "score")
+    } else {
+        extract_num(post, "tweet.like_count")
+    }
+}
+
+fn post_reposts(post: &serde_json::Value) -> String {
+    if is_reddit(post) {
+        "-".to_string()
+    } else {
+        extract_num(post, "tweet.retweet_count")
+    }
+}
+
+fn post_replies(post: &serde_json::Value) -> String {
+    if is_reddit(post) {
+        extract_num(post, "num_comments")
+    } else {
+        extract_num(post, "tweet.reply_count")
+    }
+}
+
+fn post_views(post: &serde_json::Value) -> String {
+    if is_reddit(post) {
+        "-".to_string()
+    } else {
+        extract_num(post, "tweet.view_count")
+    }
+}
+
 pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<()> {
     if data.is_empty() {
         eprintln!("{}", "no results found".yellow());
         return Ok(());
     }
+
+    // Detect if this is a Reddit result set for column headers
+    let has_reddit = data.iter().any(|p| is_reddit(p));
 
     match format {
         OutputFormat::Json => {
@@ -108,20 +178,38 @@ pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<(
         }
         OutputFormat::Csv => {
             let mut wtr = csv::Writer::from_writer(std::io::stdout());
-            wtr.write_record(["date", "author", "text", "likes", "reposts", "replies", "views"])?;
-            for post in data {
-                let text = extract_str(post, "text")
-                    .replace('\n', " ")
-                    .replace('\r', "");
-                wtr.write_record([
-                    &extract_str(post, "datetime"),
-                    &extract_str(post, "user.username"),
-                    &text,
-                    &extract_num(post, "tweet.like_count"),
-                    &extract_num(post, "tweet.retweet_count"),
-                    &extract_num(post, "tweet.reply_count"),
-                    &extract_num(post, "tweet.view_count"),
-                ])?;
+            if has_reddit {
+                wtr.write_record(["date", "author", "subreddit", "title", "body", "score", "comments"])?;
+                for post in data {
+                    let body = extract_str(post, "body")
+                        .replace('\n', " ")
+                        .replace('\r', "");
+                    wtr.write_record([
+                        &extract_str(post, "datetime"),
+                        &extract_str(post, "username"),
+                        &extract_str(post, "communityName"),
+                        &extract_str(post, "title"),
+                        &body,
+                        &extract_num(post, "score"),
+                        &extract_num(post, "num_comments"),
+                    ])?;
+                }
+            } else {
+                wtr.write_record(["date", "author", "text", "likes", "reposts", "replies", "views"])?;
+                for post in data {
+                    let text = extract_str(post, "text")
+                        .replace('\n', " ")
+                        .replace('\r', "");
+                    wtr.write_record([
+                        &extract_str(post, "datetime"),
+                        &extract_str(post, "user.username"),
+                        &text,
+                        &extract_num(post, "tweet.like_count"),
+                        &extract_num(post, "tweet.retweet_count"),
+                        &extract_num(post, "tweet.reply_count"),
+                        &extract_num(post, "tweet.view_count"),
+                    ])?;
+                }
             }
             wtr.flush()?;
         }
@@ -129,7 +217,7 @@ pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<(
             let rows: Vec<PostRow> = data
                 .iter()
                 .map(|post| {
-                    let raw_text = extract_str(post, "text")
+                    let raw_text = post_text(post)
                         .replace('\n', " ")
                         .replace('\r', "");
                     PostRow {
@@ -137,12 +225,12 @@ pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<(
                             .chars()
                             .take(16)
                             .collect(),
-                        author: truncate(&extract_str(post, "user.username"), 20),
+                        author: truncate(&post_author(post), 20),
                         text: truncate(&raw_text, 60),
-                        likes: extract_num(post, "tweet.like_count"),
-                        reposts: extract_num(post, "tweet.retweet_count"),
-                        replies: extract_num(post, "tweet.reply_count"),
-                        views: extract_num(post, "tweet.view_count"),
+                        likes: post_likes(post),
+                        reposts: post_reposts(post),
+                        replies: post_replies(post),
+                        views: post_views(post),
                     }
                 })
                 .collect();
