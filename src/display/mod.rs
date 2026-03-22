@@ -53,7 +53,7 @@ fn truncate(s: &str, max: usize) -> String {
     if chars.next().is_some() {
         format!("{collected}...")
     } else {
-        s.to_string()
+        collected
     }
 }
 
@@ -104,62 +104,46 @@ fn is_reddit(post: &serde_json::Value) -> bool {
     )
 }
 
-/// Extract the display text for a post, handling both X (text) and Reddit (title + body).
-fn post_text(post: &serde_json::Value) -> String {
-    if is_reddit(post) {
-        let title = extract_str(post, "title");
-        let body = extract_str(post, "body");
-        if title != "-" && body != "-" && !body.is_empty() {
-            format!("{title} | {body}")
-        } else if title != "-" {
-            title
+/// Extract all display fields for a post, checking source once.
+struct PostFields {
+    text: String,
+    author: String,
+    likes: String,
+    reposts: String,
+    replies: String,
+    views: String,
+}
+
+impl PostFields {
+    fn extract(post: &serde_json::Value) -> Self {
+        if is_reddit(post) {
+            let title = extract_str(post, "title");
+            let body = extract_str(post, "body");
+            let text = if title != "-" && body != "-" && !body.is_empty() {
+                format!("{title} | {body}")
+            } else if title != "-" {
+                title
+            } else {
+                body
+            };
+            Self {
+                text,
+                author: extract_str(post, "username"),
+                likes: extract_num(post, "score"),
+                reposts: "-".to_string(),
+                replies: extract_num(post, "num_comments"),
+                views: "-".to_string(),
+            }
         } else {
-            body
+            Self {
+                text: extract_str(post, "text"),
+                author: extract_str(post, "user.username"),
+                likes: extract_num(post, "tweet.like_count"),
+                reposts: extract_num(post, "tweet.retweet_count"),
+                replies: extract_num(post, "tweet.reply_count"),
+                views: extract_num(post, "tweet.view_count"),
+            }
         }
-    } else {
-        extract_str(post, "text")
-    }
-}
-
-/// Extract author for a post — Reddit uses top-level `username`, X uses `user.username`.
-fn post_author(post: &serde_json::Value) -> String {
-    if is_reddit(post) {
-        extract_str(post, "username")
-    } else {
-        extract_str(post, "user.username")
-    }
-}
-
-/// Extract engagement metrics based on source.
-fn post_likes(post: &serde_json::Value) -> String {
-    if is_reddit(post) {
-        extract_num(post, "score")
-    } else {
-        extract_num(post, "tweet.like_count")
-    }
-}
-
-fn post_reposts(post: &serde_json::Value) -> String {
-    if is_reddit(post) {
-        "-".to_string()
-    } else {
-        extract_num(post, "tweet.retweet_count")
-    }
-}
-
-fn post_replies(post: &serde_json::Value) -> String {
-    if is_reddit(post) {
-        extract_num(post, "num_comments")
-    } else {
-        extract_num(post, "tweet.reply_count")
-    }
-}
-
-fn post_views(post: &serde_json::Value) -> String {
-    if is_reddit(post) {
-        "-".to_string()
-    } else {
-        extract_num(post, "tweet.view_count")
     }
 }
 
@@ -217,7 +201,8 @@ pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<(
             let rows: Vec<PostRow> = data
                 .iter()
                 .map(|post| {
-                    let raw_text = post_text(post)
+                    let fields = PostFields::extract(post);
+                    let raw_text = fields.text
                         .replace('\n', " ")
                         .replace('\r', "");
                     PostRow {
@@ -225,12 +210,12 @@ pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<(
                             .chars()
                             .take(16)
                             .collect(),
-                        author: truncate(&post_author(post), 20),
+                        author: truncate(&fields.author, 20),
                         text: truncate(&raw_text, 60),
-                        likes: post_likes(post),
-                        reposts: post_reposts(post),
-                        replies: post_replies(post),
-                        views: post_views(post),
+                        likes: fields.likes,
+                        reposts: fields.reposts,
+                        replies: fields.replies,
+                        views: fields.views,
                     }
                 })
                 .collect();
