@@ -8,6 +8,9 @@ use tonic::transport::{Channel, ClientTlsConfig};
 use super::types::*;
 
 pub const DEFAULT_BASE_URL: &str = "https://constellation.api.cloud.macrocosmos.ai";
+const SN13_SERVICE: &str = "sn13.v1.Sn13Service";
+const GRAVITY_SERVICE: &str = "gravity.v1.GravityService";
+const CLIENT_ID: &str = "dataverse-rust-cli";
 
 // ─── Generated protobuf modules ─────────────────────────────────────
 
@@ -21,49 +24,67 @@ pub mod gravity_proto {
 
 // ─── Struct → JSON conversion ───────────────────────────────────────
 
-fn struct_to_json(s: &prost_types::Struct) -> serde_json::Value {
+fn struct_to_json(s: prost_types::Struct) -> serde_json::Value {
     let map: serde_json::Map<String, serde_json::Value> = s
         .fields
-        .iter()
-        .map(|(k, v)| (k.clone(), prost_value_to_json(v)))
+        .into_iter()
+        .map(|(k, v)| (k, prost_value_to_json(v)))
         .collect();
     serde_json::Value::Object(map)
 }
 
-fn prost_value_to_json(v: &prost_types::Value) -> serde_json::Value {
-    match &v.kind {
+fn prost_value_to_json(v: prost_types::Value) -> serde_json::Value {
+    match v.kind {
         Some(prost_types::value::Kind::NullValue(_)) => serde_json::Value::Null,
         Some(prost_types::value::Kind::NumberValue(n)) => {
-            if *n == (*n as i64) as f64 && n.is_finite() {
-                serde_json::Value::Number(serde_json::Number::from(*n as i64))
+            if n == (n as i64) as f64 && n.is_finite() {
+                serde_json::Value::Number(serde_json::Number::from(n as i64))
             } else {
-                serde_json::Number::from_f64(*n)
+                serde_json::Number::from_f64(n)
                     .map(serde_json::Value::Number)
                     .unwrap_or(serde_json::Value::Null)
             }
         }
-        Some(prost_types::value::Kind::StringValue(s)) => serde_json::Value::String(s.clone()),
-        Some(prost_types::value::Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
+        Some(prost_types::value::Kind::StringValue(s)) => serde_json::Value::String(s),
+        Some(prost_types::value::Kind::BoolValue(b)) => serde_json::Value::Bool(b),
         Some(prost_types::value::Kind::StructValue(s)) => struct_to_json(s),
         Some(prost_types::value::Kind::ListValue(l)) => {
-            serde_json::Value::Array(l.values.iter().map(prost_value_to_json).collect())
+            serde_json::Value::Array(l.values.into_iter().map(prost_value_to_json).collect())
         }
         None => serde_json::Value::Null,
     }
 }
 
+/// Convert empty proto strings to None.
+fn nonempty(s: &str) -> Option<String> {
+    if s.is_empty() { None } else { Some(s.to_string()) }
+}
+
+/// Convert notification requests from our types to proto types.
+fn to_grpc_notifications(
+    reqs: &Option<Vec<NotificationRequest>>,
+) -> Vec<gravity_proto::NotificationRequest> {
+    reqs.as_ref()
+        .map(|nrs| {
+            nrs.iter()
+                .map(|n| gravity_proto::NotificationRequest {
+                    r#type: n.r#type.clone(),
+                    address: n.address.clone(),
+                    redirect_url: n.redirect_url.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ─── Timestamp helpers ──────────────────────────────────────────────
 
 fn timestamp_to_string(ts: &prost_types::Timestamp) -> String {
-    // Convert to RFC 3339 style: YYYY-MM-DDTHH:MM:SSZ
-    let secs = ts.seconds;
-    // Use chrono-free approach: seconds since epoch -> date string
-    // We'll format as ISO 8601
-    let dt = std::time::UNIX_EPOCH + Duration::from_secs(secs as u64);
-    let datetime: std::time::SystemTime = dt;
-    // Format using the humantime crate approach — just produce the timestamp
-    // Actually, let's just produce a simple format
-    humantime_format(datetime)
+    if ts.seconds < 0 {
+        return String::new();
+    }
+    let dt = std::time::UNIX_EPOCH + Duration::from_secs(ts.seconds as u64);
+    humantime_format(dt)
 }
 
 fn humantime_format(t: std::time::SystemTime) -> String {
@@ -166,7 +187,20 @@ fn ymd_to_days(year: i64, month: u32, day: u32) -> i64 {
 
 #[derive(Clone)]
 struct AuthInterceptor {
-    api_key: String,
+    auth_header: MetadataValue<tonic::metadata::Ascii>,
+    client_id: MetadataValue<tonic::metadata::Ascii>,
+}
+
+impl AuthInterceptor {
+    fn new(api_key: &str) -> Result<Self> {
+        let auth_header = format!("Bearer {api_key}")
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid API key for header"))?;
+        let client_id = CLIENT_ID
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid client ID"))?;
+        Ok(Self { auth_header, client_id })
+    }
 }
 
 impl tonic::service::Interceptor for AuthInterceptor {
@@ -174,15 +208,8 @@ impl tonic::service::Interceptor for AuthInterceptor {
         &mut self,
         mut req: tonic::Request<()>,
     ) -> std::result::Result<tonic::Request<()>, tonic::Status> {
-        let val: MetadataValue<_> = format!("Bearer {}", self.api_key)
-            .parse()
-            .map_err(|_| tonic::Status::internal("invalid api key"))?;
-        req.metadata_mut().insert("authorization", val);
-
-        if let Ok(v) = "dataverse-rust-cli".parse() {
-            req.metadata_mut().insert("x-client-id", v);
-        }
-
+        req.metadata_mut().insert("authorization", self.auth_header.clone());
+        req.metadata_mut().insert("x-client-id", self.client_id.clone());
         Ok(req)
     }
 }
@@ -242,9 +269,7 @@ impl ApiClient {
             .timeout(Duration::from_secs(timeout_secs))
             .connect_lazy();
 
-        let interceptor = AuthInterceptor {
-            api_key: api_key.clone(),
-        };
+        let interceptor = AuthInterceptor::new(&api_key)?;
 
         let sn13 = sn13_proto::sn13_service_client::Sn13ServiceClient::with_interceptor(
             channel.clone(),
@@ -282,7 +307,7 @@ impl ApiClient {
             "content-type".to_string(),
             "application/grpc".to_string(),
         );
-        headers.insert("x-client-id".to_string(), "dataverse-rust-cli".to_string());
+        headers.insert("x-client-id".to_string(), CLIENT_ID.to_string());
 
         DryRunOutput {
             method: "gRPC".to_string(),
@@ -318,8 +343,8 @@ impl ApiClient {
 
         let inner = response.into_inner();
 
-        let data: Vec<serde_json::Value> = inner.data.iter().map(struct_to_json).collect();
-        let meta = inner.meta.as_ref().map(struct_to_json);
+        let data: Vec<serde_json::Value> = inner.data.into_iter().map(struct_to_json).collect();
+        let meta = inner.meta.map(struct_to_json);
 
         // The gRPC server may return an empty status string on success;
         // normalize to "success" so downstream checks work.
@@ -338,7 +363,7 @@ impl ApiClient {
 
     pub fn on_demand_data_dry_run(&self, req: &OnDemandDataRequest) -> Result<DryRunOutput> {
         let body = serde_json::to_value(req)?;
-        Ok(self.dry_run("sn13.v1.Sn13Service", "OnDemandData", &body))
+        Ok(self.dry_run(SN13_SERVICE, "OnDemandData", &body))
     }
 
     // ─── Gravity ─────────────────────────────────────────────────
@@ -365,19 +390,7 @@ impl ApiClient {
             })
             .collect();
 
-        let grpc_notifications: Vec<gravity_proto::NotificationRequest> = req
-            .notification_requests
-            .as_ref()
-            .map(|nrs| {
-                nrs.iter()
-                    .map(|n| gravity_proto::NotificationRequest {
-                        r#type: n.r#type.clone(),
-                        address: n.address.clone(),
-                        redirect_url: n.redirect_url.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let grpc_notifications = to_grpc_notifications(&req.notification_requests);
 
         let grpc_req = gravity_proto::CreateGravityTaskRequest {
             gravity_tasks: grpc_tasks,
@@ -405,7 +418,7 @@ impl ApiClient {
     ) -> Result<DryRunOutput> {
         let body = serde_json::to_value(req)?;
         Ok(self.dry_run(
-            "gravity.v1.GravityService",
+            GRAVITY_SERVICE,
             "CreateGravityTask",
             &body,
         ))
@@ -446,21 +459,9 @@ impl ApiClient {
                     };
 
                 GravityTaskState {
-                    gravity_task_id: if s.gravity_task_id.is_empty() {
-                        None
-                    } else {
-                        Some(s.gravity_task_id.clone())
-                    },
-                    name: if s.name.is_empty() {
-                        None
-                    } else {
-                        Some(s.name.clone())
-                    },
-                    status: if s.status.is_empty() {
-                        None
-                    } else {
-                        Some(s.status.clone())
-                    },
+                    gravity_task_id: nonempty(&s.gravity_task_id),
+                    name: nonempty(&s.name),
+                    status: nonempty(&s.status),
                     start_time: s.start_time.as_ref().map(timestamp_to_string),
                     crawler_ids: if s.crawler_ids.is_empty() {
                         None
@@ -483,7 +484,7 @@ impl ApiClient {
     ) -> Result<DryRunOutput> {
         let body = serde_json::to_value(req)?;
         Ok(self.dry_run(
-            "gravity.v1.GravityService",
+            GRAVITY_SERVICE,
             "GetGravityTasks",
             &body,
         ))
@@ -493,19 +494,7 @@ impl ApiClient {
         &self,
         req: &BuildDatasetRequest,
     ) -> Result<BuildDatasetResponse> {
-        let grpc_notifications: Vec<gravity_proto::NotificationRequest> = req
-            .notification_requests
-            .as_ref()
-            .map(|nrs| {
-                nrs.iter()
-                    .map(|n| gravity_proto::NotificationRequest {
-                        r#type: n.r#type.clone(),
-                        address: n.address.clone(),
-                        redirect_url: n.redirect_url.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let grpc_notifications = to_grpc_notifications(&req.notification_requests);
 
         let grpc_req = gravity_proto::BuildDatasetRequest {
             crawler_id: req.crawler_id.clone(),
@@ -530,7 +519,7 @@ impl ApiClient {
 
     pub fn build_dataset_dry_run(&self, req: &BuildDatasetRequest) -> Result<DryRunOutput> {
         let body = serde_json::to_value(req)?;
-        Ok(self.dry_run("gravity.v1.GravityService", "BuildDataset", &body))
+        Ok(self.dry_run(GRAVITY_SERVICE, "BuildDataset", &body))
     }
 
     pub async fn get_dataset(&self, req: &GetDatasetRequest) -> Result<GetDatasetResponse> {
@@ -554,7 +543,7 @@ impl ApiClient {
 
     pub fn get_dataset_dry_run(&self, req: &GetDatasetRequest) -> Result<DryRunOutput> {
         let body = serde_json::to_value(req)?;
-        Ok(self.dry_run("gravity.v1.GravityService", "GetDataset", &body))
+        Ok(self.dry_run(GRAVITY_SERVICE, "GetDataset", &body))
     }
 
     pub async fn cancel_gravity_task(&self, task_id: &str) -> Result<CancelResponse> {
@@ -656,11 +645,7 @@ fn dataset_to_json(d: &gravity_proto::Dataset) -> serde_json::Value {
 
 fn proto_dataset_to_dataset_info(d: &gravity_proto::Dataset) -> DatasetInfo {
     DatasetInfo {
-        crawler_workflow_id: if d.crawler_workflow_id.is_empty() {
-            None
-        } else {
-            Some(d.crawler_workflow_id.clone())
-        },
+        crawler_workflow_id: nonempty(&d.crawler_workflow_id),
         create_date: d.create_date.as_ref().map(timestamp_to_string),
         expire_date: d.expire_date.as_ref().map(timestamp_to_string),
         files: if d.files.is_empty() {
@@ -670,32 +655,16 @@ fn proto_dataset_to_dataset_info(d: &gravity_proto::Dataset) -> DatasetInfo {
                 d.files
                     .iter()
                     .map(|f| DatasetFile {
-                        file_name: if f.file_name.is_empty() {
-                            None
-                        } else {
-                            Some(f.file_name.clone())
-                        },
+                        file_name: nonempty(&f.file_name),
                         file_size_bytes: Some(f.file_size_bytes as i64),
                         num_rows: Some(f.num_rows as i64),
-                        url: if f.url.is_empty() {
-                            None
-                        } else {
-                            Some(f.url.clone())
-                        },
+                        url: nonempty(&f.url),
                     })
                     .collect(),
             )
         },
-        status: if d.status.is_empty() {
-            None
-        } else {
-            Some(d.status.clone())
-        },
-        status_message: if d.status_message.is_empty() {
-            None
-        } else {
-            Some(d.status_message.clone())
-        },
+        status: nonempty(&d.status),
+        status_message: nonempty(&d.status_message),
         steps: if d.steps.is_empty() {
             None
         } else {
@@ -707,11 +676,7 @@ fn proto_dataset_to_dataset_info(d: &gravity_proto::Dataset) -> DatasetInfo {
                         step: Some(serde_json::Value::Number(serde_json::Number::from(
                             s.step,
                         ))),
-                        step_name: if s.step_name.is_empty() {
-                            None
-                        } else {
-                            Some(s.step_name.clone())
-                        },
+                        step_name: nonempty(&s.step_name),
                     })
                     .collect(),
             )
