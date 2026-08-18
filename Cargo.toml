@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/macrocosm-os/dataverse-cli"
 keywords = ["bittensor", "macrocosmos", "social-data", "cli", "sn13"]
 categories = ["command-line-utilities"]
-include = ["src/**/*", "proto/**/*", "build.rs", "Cargo.toml", "LICENSE", "README.md", "AGENTS.md"]
+include = ["src/**/*", "Cargo.toml", "LICENSE", "README.md", "AGENTS.md"]
 
 [[bin]]
 name = "dv"
@@ -26,13 +26,6 @@ dirs = "6"
 toml = "0.8"
 csv = "1"
 dialoguer = "0.11"
-tonic = { version = "0.12", features = ["tls", "tls-native-roots", "transport", "gzip"] }
-prost = "0.13"
-prost-types = "0.13"
-
-[build-dependencies]
-tonic-build = "0.12"
-
 [profile.release]
 opt-level = 3
 lto = true
