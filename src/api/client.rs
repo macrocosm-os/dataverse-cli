@@ -79,11 +79,26 @@ impl tonic::service::Interceptor for AuthInterceptor {
     ) -> std::result::Result<tonic::Request<()>, tonic::Status> {
         req.metadata_mut().insert("authorization", self.auth_header.clone());
         req.metadata_mut().insert("x-client-id", self.client_id.clone());
+        // Match Python SDK metadata — server may require these
+        if let Ok(v) = format!("dataverse-cli/{}", env!("CARGO_PKG_VERSION")).parse() {
+            req.metadata_mut().insert("x-client-version", v);
+        }
+        if let Ok(v) = "dataverse-cli".parse() {
+            req.metadata_mut().insert("x-source", v);
+        }
         Ok(req)
     }
 }
 
 // ─── Error mapping ──────────────────────────────────────────────────
+
+/// The ALB/server sometimes answers a gRPC request with a plain JSON error
+/// body (e.g. auth failures come back as HTTP 500 + JSON). tonic then fails
+/// with "invalid compression flag: 123" — 123 is '{', the first byte of the
+/// JSON. This detects that case so we can fetch the real error message.
+fn is_json_over_grpc_error(status: &tonic::Status) -> bool {
+    status.message().contains("invalid compression flag")
+}
 
 fn map_grpc_error(status: tonic::Status) -> anyhow::Error {
     match status.code() {
@@ -140,7 +155,9 @@ impl ApiClient {
         let sn13 = sn13_proto::sn13_service_client::Sn13ServiceClient::with_interceptor(
             channel,
             interceptor,
-        );
+        )
+        .send_compressed(tonic::codec::CompressionEncoding::Gzip)
+        .accept_compressed(tonic::codec::CompressionEncoding::Gzip);
 
         // Gravity: HTTP/JSON (their gRPC endpoint is broken — sends JSON over binary channel)
         let mut headers = reqwest::header::HeaderMap::new();
@@ -180,6 +197,13 @@ impl ApiClient {
             let body_text = resp.text().await.unwrap_or_default();
             match status.as_u16() {
                 401 => anyhow::bail!("authentication failed: check your API key. {body_text}"),
+                // Auth failures often surface as 500 with an error body
+                _ if body_text.contains("Expired token") => anyhow::bail!(
+                    "authentication failed: your API key has expired.\n  Get a new key at https://app.macrocosmos.ai/account?tab=api-keys and run `dv auth`."
+                ),
+                _ if body_text.contains("API Key") || body_text.contains("api_key") => anyhow::bail!(
+                    "authentication failed: {body_text}\n  Check your key at https://app.macrocosmos.ai/account?tab=api-keys or run `dv auth`."
+                ),
                 500 | 502 | 503 | 504 => {
                     let msg = if body_text.is_empty() { "server error".to_string() } else { body_text };
                     anyhow::bail!("service temporarily unavailable ({status}): {msg}\n  Tip: the SN13 miner network may be busy. Retry in a few seconds.");
@@ -190,6 +214,30 @@ impl ApiClient {
 
         resp.json::<T>().await
             .with_context(|| format!("failed to parse response from {url}"))
+    }
+
+    /// Replay a failed SN13 request over the HTTP/JSON transcoding endpoint
+    /// to recover the real error message the gRPC channel couldn't decode.
+    /// Returns None if the replay unexpectedly succeeds or yields no message.
+    async fn fetch_json_error(&self, method: &str, body: &impl serde::Serialize) -> Option<anyhow::Error> {
+        let url = format!("{}/{}/{}", self.base_url, SN13_SERVICE, method);
+        let resp = self.http.post(&url).json(body).send().await.ok()?;
+        if resp.status().is_success() {
+            return None;
+        }
+        let v: serde_json::Value = resp.json().await.ok()?;
+        let msg = v.get("message")?.as_str()?.to_string();
+        if msg.contains("Expired token") {
+            Some(anyhow::anyhow!(
+                "authentication failed: your API key has expired.\n  Get a new key at https://app.macrocosmos.ai/account?tab=api-keys and run `dv auth`."
+            ))
+        } else if msg.contains("API Key") || msg.contains("api_key") || msg.contains("authentication failed") {
+            Some(anyhow::anyhow!(
+                "authentication failed: {msg}\n  Check your key at https://app.macrocosmos.ai/account?tab=api-keys or run `dv auth`."
+            ))
+        } else {
+            Some(anyhow::anyhow!("API error: {msg}"))
+        }
     }
 
     // ─── Dry-run helpers ─────────────────────────────────────────
@@ -236,12 +284,22 @@ impl ApiClient {
             url: req.url.clone(),
         };
 
-        let response = self
+        let response = match self
             .sn13
             .clone()
             .on_demand_data(tonic::Request::new(grpc_req))
             .await
-            .map_err(map_grpc_error)?;
+        {
+            Ok(resp) => resp,
+            Err(status) => {
+                if is_json_over_grpc_error(&status) {
+                    if let Some(err) = self.fetch_json_error("OnDemandData", req).await {
+                        return Err(err);
+                    }
+                }
+                return Err(map_grpc_error(status));
+            }
+        };
 
         let inner = response.into_inner();
 
@@ -317,6 +375,45 @@ impl ApiClient {
     pub async fn cancel_dataset(&self, dataset_id: &str) -> Result<CancelResponse> {
         let req = CancelRequest { gravity_task_id: None, dataset_id: Some(dataset_id.to_string()) };
         self.gravity_post("CancelDataset", &req).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_value(kind: prost_types::value::Kind) -> prost_types::Value {
+        prost_types::Value { kind: Some(kind) }
+    }
+
+    #[test]
+    fn prost_numbers_convert_to_integers_when_whole() {
+        use prost_types::value::Kind;
+        assert_eq!(prost_value_to_json(make_value(Kind::NumberValue(42.0))), serde_json::json!(42));
+        assert_eq!(prost_value_to_json(make_value(Kind::NumberValue(1.5))), serde_json::json!(1.5));
+    }
+
+    #[test]
+    fn prost_struct_converts_to_json_object() {
+        use prost_types::value::Kind;
+        let s = prost_types::Struct {
+            fields: [
+                ("name".to_string(), make_value(Kind::StringValue("dv".to_string()))),
+                ("ok".to_string(), make_value(Kind::BoolValue(true))),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(struct_to_json(s), serde_json::json!({"name": "dv", "ok": true}));
+    }
+
+    #[test]
+    fn json_over_grpc_error_detected_by_message() {
+        let status = tonic::Status::internal(
+            "protocol error: received message with invalid compression flag: 123",
+        );
+        assert!(is_json_over_grpc_error(&status));
+        assert!(!is_json_over_grpc_error(&tonic::Status::internal("boom")));
     }
 }
 

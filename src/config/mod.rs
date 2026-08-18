@@ -72,3 +72,37 @@ impl Config {
         format!("{prefix}...{suffix}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_key_short_keys_fully_masked() {
+        assert_eq!(Config::mask_key(""), "****");
+        assert_eq!(Config::mask_key("abcd1234"), "****");
+    }
+
+    #[test]
+    fn mask_key_long_keys_show_edges() {
+        assert_eq!(Config::mask_key("abcd000000001234"), "abcd...1234");
+    }
+
+    #[test]
+    fn resolve_api_key_prefers_flag() {
+        let key = Config::resolve_api_key(&Some("flagkey".to_string())).unwrap();
+        assert_eq!(key, "flagkey");
+    }
+
+    #[test]
+    fn config_roundtrips_through_toml() {
+        let config = Config {
+            api_key: Some("secret".to_string()),
+            base_url: None,
+        };
+        let s = toml::to_string_pretty(&config).unwrap();
+        let back: Config = toml::from_str(&s).unwrap();
+        assert_eq!(back.api_key.as_deref(), Some("secret"));
+        assert!(back.base_url.is_none());
+    }
+}

@@ -154,7 +154,7 @@ pub fn print_posts(data: &[serde_json::Value], format: OutputFormat) -> Result<(
     }
 
     // Detect if this is a Reddit result set for column headers
-    let has_reddit = data.iter().any(|p| is_reddit(p));
+    let has_reddit = data.iter().any(is_reddit);
 
     match format {
         OutputFormat::Json => {
@@ -404,7 +404,7 @@ pub fn print_dataset(dataset: &DatasetInfo, format: OutputFormat) -> Result<()> 
                         let name = f.file_name.as_deref().unwrap_or("?");
                         let size = f
                             .file_size_bytes
-                            .map(|b| format_bytes(b))
+                            .map(format_bytes)
                             .unwrap_or_else(|| "-".to_string());
                         let rows = f
                             .num_rows

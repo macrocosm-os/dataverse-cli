@@ -21,15 +21,25 @@ fn probe_request() -> OnDemandDataRequest {
     }
 }
 
-pub async fn run_auth() -> Result<()> {
-    println!("{}", "Dataverse CLI - API Key Setup".bold());
-    println!();
-    println!("Get your free API key at: {}", "https://app.macrocosmos.ai/account?tab=api-keys".cyan());
-    println!();
+pub async fn run_auth(opts: &GlobalOpts) -> Result<()> {
+    use std::io::IsTerminal;
 
-    let key: String = Password::new()
-        .with_prompt("API key")
-        .interact()?;
+    let key: String = if let Some(k) = &opts.api_key {
+        // Non-interactive: dv auth --api-key <key>
+        k.trim().to_string()
+    } else if !std::io::stdin().is_terminal() {
+        // Non-interactive: echo <key> | dv auth
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line.trim().to_string()
+    } else {
+        println!("{}", "Dataverse CLI - API Key Setup".bold());
+        println!();
+        println!("Get your free API key at: {}", "https://app.macrocosmos.ai/account?tab=api-keys".cyan());
+        println!();
+
+        Password::new().with_prompt("API key").interact()?
+    };
 
     if key.trim().is_empty() {
         anyhow::bail!("API key cannot be empty");
@@ -45,7 +55,7 @@ pub async fn run_auth() -> Result<()> {
             let msg = format!("{e}");
             if msg.contains("authentication failed") {
                 println!("{}", "invalid".red());
-                anyhow::bail!("API key is invalid (401). Check your key at https://app.macrocosmos.ai");
+                anyhow::bail!("{e}");
             } else {
                 println!("{}", "warning".yellow());
                 eprintln!(

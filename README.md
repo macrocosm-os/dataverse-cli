@@ -204,10 +204,12 @@ dv gravity cancel-dataset dataset-abc123
 ### `dv auth` — Configure API Key
 
 ```sh
-dv auth
+dv auth                      # interactive prompt
+dv auth --api-key <key>      # non-interactive
+echo <key> | dv auth         # from stdin (scripts/CI)
 ```
 
-Interactive setup that validates your key against the SN13 network and saves to config.
+Validates your key against the SN13 network and saves it to the config file.
 
 ---
 
