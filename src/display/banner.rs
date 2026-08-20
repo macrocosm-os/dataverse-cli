@@ -50,11 +50,7 @@ pub fn print_banner() {
     for line in WELCOME_LINES {
         // Pad each line to BOX_WIDTH using char count (not byte count)
         let char_len = line.chars().count();
-        let padding = if char_len < BOX_WIDTH {
-            BOX_WIDTH - char_len
-        } else {
-            0
-        };
+        let padding = BOX_WIDTH.saturating_sub(char_len);
         eprintln!(
             "  {}{}{}{}",
             "║".dimmed(),

@@ -39,6 +39,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::enum_variant_names)] // `Commands` variant = the `dv commands` subcommand
 pub enum Commands {
     /// Search social media posts from X or Reddit
     Search(search::SearchArgs),
@@ -95,7 +96,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     match command {
         Commands::Search(args) => search::run(&opts, args).await,
         Commands::Gravity(cmd) => gravity::run(&opts, cmd).await,
-        Commands::Auth => auth::run_auth().await,
+        Commands::Auth => auth::run_auth(&opts).await,
         Commands::Status => auth::run_status(&opts).await,
         Commands::Commands => {
             commands::run_commands();
